@@ -24,8 +24,9 @@ static uint16_t movi_size_addr = 0x08;
 static uint16_t total_size_addr = 0x10;
 static uint32_t rec_frame = 0;
 static uint32_t movi_size = 0;
-static int16_t exposure_time = -1; // -1 is AutoExposure
+static int16_t  exposure_time = -1; // -1 is AutoExposure
 static uint16_t interval_time = 60; // 60 sec
+static uint8_t  auto_white_balance = 0;
 
 #define TOTAL_FRAMES 300
 #define AVIOFFSET 240
@@ -88,6 +89,7 @@ void setup() {
     movi_size = infFile.readStringUntil('\n').toInt();
     exposure_time = infFile.readStringUntil('\n').toFloat();
     interval_time = infFile.readStringUntil('\n').toInt();
+    auto_white_balance = infFile.readStringUntil('\n').toInt();
     Serial.println("Read Rec Frame: " + String(rec_frame));
     Serial.println("Read Movie Size: " + String(movi_size));
     Serial.println("Read Exposure Time: " + String(exposure_time));
@@ -131,6 +133,12 @@ void setup() {
   } else {
     Serial.println("Exposure:" + String(exposure_time/10.) + "msec");
     theCamera.setAbsoluteExposure(exposure_time); // 0.1 sec
+  }
+  
+  if (auto_white_balance) {
+    theCamera.setAutoWhiteBalance(true);  
+  } else {
+    theCamera.setAutoWhiteBalance(false);      
   }
   theCamera.setStillPictureImageFormat(
       img_width
@@ -205,6 +213,7 @@ void loop() {
   infFile.println(String(movi_size));
   infFile.println(String(exposure_time));
   infFile.println(String(interval_time));
+  infFile.println(String(auto_white_balance));  
   infFile.close();
   Serial.println("Information File Update: ");
   Serial.println("Write Rec Frame: " + String(rec_frame));
