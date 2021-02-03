@@ -1,4 +1,3 @@
-
 #include <SPI.h>
 #include <SPISD.h>
 #include <Camera.h>
@@ -8,9 +7,11 @@
 SpiSDClass SD(SPI5);
 SpiFile infFile;
 SpiFile aviFile;
+SpiFile logFile;
 
 static const String aviFilename = "movie.avi";
 static const String infFilename = "info.txt";
+static const String logFilename = "log.txt";
 static const int img_width = 1280;
 static const int img_height = 960;
 
@@ -24,9 +25,12 @@ static uint16_t movi_size_addr = 0x08;
 static uint16_t total_size_addr = 0x10;
 static uint32_t rec_frame = 0;
 static uint32_t movi_size = 0;
+static uint32_t total_size = 0;
 static int16_t  exposure_time = -1; // -1 is AutoExposure
 static uint16_t interval_time = 60; // 60 sec
-static uint8_t  auto_white_balance = 0;
+static float    target_fps = 10.0f; // 10 fps
+static bool     auto_white_balance = 0;
+static bool     log_enable = 0;
 
 #define TOTAL_FRAMES 300
 #define AVIOFFSET 240
@@ -65,6 +69,67 @@ static void inline uint32_write_to_aviFile(uint32_t v) {
   aviFile.write(value);
 }
 
+static void recordingTerminated() {
+  Serial.println("Recording Abnormal Terminated");
+  aviFile.close();
+  infFile.close();
+  logFile.close();
+  while(true) {
+    digitalWrite(LED0, LOW);
+    digitalWrite(LED1, LOW);
+    digitalWrite(LED2, LOW);
+    digitalWrite(LED3, LOW);
+    usleep(500000);
+    digitalWrite(LED0, HIGH);
+    digitalWrite(LED1, HIGH);
+    digitalWrite(LED2, HIGH);
+    digitalWrite(LED3, HIGH);
+    usleep(500000);
+  }
+}
+
+void logPrintln(String str) {
+  Serial.println(str);
+  if (log_enable && logFile) {
+    logFile.println(str);
+  }
+}
+
+const char* boot_cause_strings[] = {
+  "Power On Reset with Power Supplied",
+  "System WDT expired or Self Reboot",
+  "Chip WDT expired",
+  "WKUPL signal detected in deep sleep",
+  "WKUPS signal detected in deep sleep",
+  "RTC Alarm expired in deep sleep",
+  "USB Connected in deep sleep",
+  "Others in deep sleep",
+  "SCU Interrupt detected in cold sleep",
+  "RTC Alarm0 expired in cold sleep",
+  "RTC Alarm1 expired in cold sleep",
+  "RTC Alarm2 expired in cold sleep",
+  "RTC Alarm Error occurred in cold sleep",
+  "Unknown(13)",
+  "Unknown(14)",
+  "Unknown(15)",
+  "GPIO detected in cold sleep",
+  "GPIO detected in cold sleep",
+  "GPIO detected in cold sleep",
+  "GPIO detected in cold sleep",
+  "GPIO detected in cold sleep",
+  "GPIO detected in cold sleep",
+  "GPIO detected in cold sleep",
+  "GPIO detected in cold sleep",
+  "GPIO detected in cold sleep",
+  "GPIO detected in cold sleep",
+  "GPIO detected in cold sleep",
+  "GPIO detected in cold sleep",
+  "SEN_INT signal detected in cold sleep",
+  "PMIC signal detected in cold sleep",
+  "USB Disconnected in cold sleep",
+  "USB Connected in cold sleep",
+  "Power On Reset",
+};
 
 void setup() {
   Serial.begin(115200);
@@ -83,44 +148,63 @@ void setup() {
     infFile = SD.open(infFilename, FILE_READ);
     if (!infFile) {
       Serial.println("Information File Open Error for reading");
-      while(1);
+      recordingTerminated();
     }
     rec_frame = infFile.readStringUntil('\n').toInt();
     movi_size = infFile.readStringUntil('\n').toInt();
+    total_size = infFile.readStringUntil('\n').toInt();
     exposure_time = infFile.readStringUntil('\n').toFloat();
     interval_time = infFile.readStringUntil('\n').toInt();
+    target_fps = infFile.readStringUntil('\n').toFloat();
     auto_white_balance = infFile.readStringUntil('\n').toInt();
-    Serial.println("Read Rec Frame: " + String(rec_frame));
-    Serial.println("Read Movie Size: " + String(movi_size));
-    Serial.println("Read Exposure Time: " + String(exposure_time));
-    Serial.println("Read Interval Time: " + String(interval_time));
+    log_enable = infFile.readStringUntil('\n').toInt();
     infFile.close();
   } else {
-    // default
+    /*-- default --*/
     // rec_frame = 0;
     // movi_size = 0;
     // exposure_time = -1; /* 100msec */ 
     // interval_time = 60;  /* sec */
   }
 
-   // check for recording for the first time.
+  if (log_enable) {
+    logFile = SD.open(logFilename, FILE_WRITE);
+    if (!logFile) {
+      Serial.println("Log File Open Error");
+      recordingTerminated();
+    }    
+  }
+  
+  logPrintln("Boot Cause: " + String(boot_cause_strings[bc]));  
+  logPrintln("Read Rec Frame: " + String(rec_frame));
+  logPrintln("Read Movie Size: " + String(movi_size));
+  logPrintln("Read Total Size: " + String(total_size));  
+  logPrintln("Read Exposure Time: " + String(exposure_time));
+  logPrintln("Read Interval Time: " + String(interval_time));
+  logPrintln("Read Target FPS: " + String(target_fps));
+  logPrintln("Read White Balance: " + String(auto_white_balance));
+  logPrintln("Read Log Enable: " + String(log_enable));
+
+  // check for recording for the first time.
   if (bc != DEEP_RTC) {
-    Serial.println("Power on reset");
+    logPrintln("Power on reset");
     if (SD.exists(aviFilename)) {
       SD.remove(aviFilename);
-      rec_frame = 0;
-      movi_size = 0;
-      Serial.println("removed " + aviFilename);
+      logPrintln("removed " + aviFilename);
     }
-  } 
+    rec_frame = 0;
+    movi_size = 0;
+    total_size = 0;    
+  }
+
   aviFile = SD.open(aviFilename ,FILE_WRITE);
   if (!aviFile) {
-    Serial.println("Movie File Open Error!");
-    while(1);
+    logPrintln("Movie File Open Error!");
+    recordingTerminated();
   }
   
   if (rec_frame == 0) {
-    Serial.println("First time: write header");
+    logPrintln("First time: write header");
     aviFile.write(avi_header, AVIOFFSET);
     sleep(3); // wait for 3sec
   }
@@ -128,18 +212,21 @@ void setup() {
   Serial.println("Recording...");
   theCamera.begin();
   if (exposure_time < 0) {
-    Serial.println("Exposure Auto");
+    logPrintln("Exposure Auto");
     theCamera.setAutoExposure(true); // 0.1 sec    
   } else {
-    Serial.println("Exposure:" + String(exposure_time/10.) + "msec");
+    logPrintln("Exposure:" + String(exposure_time/10.) + "msec");
     theCamera.setAbsoluteExposure(exposure_time); // 0.1 sec
   }
   
   if (auto_white_balance) {
+    logPrintln("Auto White Balance ON");
     theCamera.setAutoWhiteBalance(true);  
   } else {
+    logPrintln("Auto White Balance OFF");
     theCamera.setAutoWhiteBalance(false);      
   }
+  
   theCamera.setStillPictureImageFormat(
       img_width
      ,img_height
@@ -150,13 +237,12 @@ void loop() {
   
   CamImage img = theCamera.takePicture();
   if (!img.isAvailable()) {
-    Serial.println("faile to take a picture");
+    logPrintln("faile to take a picture");
     return;
   }
 
-  if (rec_frame != 0) {
-    aviFile.seek(aviFile.size());
-  }
+  logPrintln("aviFile.size() " + String(aviFile.size())); 
+  aviFile.seek(aviFile.size());
   aviFile.write("00dc", 4);
 
   uint32_t jpeg_size = img.getImgSize();
@@ -170,8 +256,8 @@ void loop() {
   /* Spresense's jpg file is assumed to be 16bits aligned 
    * So, there's no padding operation */
 
-  float duration_sec = 0.1; // fix 10fps for Timelapse
-  float fps_in_float = 10.0f; // fix 10fps for Timelapse
+  float duration_sec = 1/target_fps; // fix 10fps for Timelapse
+  float fps_in_float = target_fps; // fix 10fps for Timelapse
   float us_per_frame_in_float = 1000000.0f / fps_in_float;
   uint32_t fps = round(fps_in_float);
   uint32_t us_per_frame = round(us_per_frame_in_float);
@@ -211,20 +297,27 @@ void loop() {
   }
   infFile.println(String(rec_frame));
   infFile.println(String(movi_size));
+  infFile.println(String(total_size));
   infFile.println(String(exposure_time));
   infFile.println(String(interval_time));
+  infFile.println(String(target_fps));
   infFile.println(String(auto_white_balance));  
+  infFile.println(String(log_enable));  
   infFile.close();
-  Serial.println("Information File Update: ");
-  Serial.println("Write Rec Frame: " + String(rec_frame));
-  Serial.println("Write Movie Size: " + String(movi_size));
+  
+  logPrintln("Information File Update: ");
+  logPrintln("Write Rec Frame: " + String(rec_frame));
+  logPrintln("Write Movie Size: " + String(movi_size));
+  logPrintln("Write Total Size: " + String(total_size));
+  logPrintln("Movie saved");
+  logPrintln(" File size (kB): " + String(total_size));
+  logPrintln(" Captured Frame: " + String(rec_frame)); 
+  logPrintln(" Duration (sec): " + String(duration_sec));
+  logPrintln(" Frame per sec : " + String(fps));
+  logPrintln(" Max data rate : " + String(max_bytes_per_sec));
 
-  Serial.println("Movie saved");
-  Serial.println(" File size (kB): " + String(total_size));
-  Serial.println(" Captured Frame: " + String(rec_frame)); 
-  Serial.println(" Duration (sec): " + String(duration_sec));
-  Serial.println(" Frame per sec : " + String(fps));
-  Serial.println(" Max data rate : " + String(max_bytes_per_sec));
+  logFile.close();
+
 
   digitalWrite(LED2, LOW);
   digitalWrite(LED3, LOW);
