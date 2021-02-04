@@ -9,7 +9,7 @@ SpiFile infFile;
 SpiFile aviFile;
 SpiFile logFile;
 
-static const String aviFilename = "movie.avi";
+static const String aviFilename = "movi";
 static const String infFilename = "info.txt";
 static const String logFilename = "log.txt";
 static const int img_width = 1280;
@@ -26,6 +26,7 @@ static uint16_t total_size_addr = 0x10;
 static uint32_t rec_frame = 0;
 static uint32_t movi_size = 0;
 static uint32_t total_size = 0;
+static uint16_t reset_times = 0;
 static int16_t  exposure_time = -1; // -1 is AutoExposure
 static uint16_t interval_time = 60; // 60 sec
 static float    target_fps = 10.0f; // 10 fps
@@ -158,6 +159,7 @@ void setup() {
     target_fps = infFile.readStringUntil('\n').toFloat();
     auto_white_balance = infFile.readStringUntil('\n').toInt();
     log_enable = infFile.readStringUntil('\n').toInt();
+    reset_times = infFile.readStringUntil('\n').toInt();
     infFile.close();
   } else {
     /*-- default --*/
@@ -184,19 +186,18 @@ void setup() {
   logPrintln("Read Target FPS: " + String(target_fps));
   logPrintln("Read White Balance: " + String(auto_white_balance));
   logPrintln("Read Log Enable: " + String(log_enable));
-
+  logPrintln("Read Reset Times: " + String(reset_times));
+    
   // check for recording for the first time.
-  if (bc != DEEP_RTC) {
+  if (bc != DEEP_RTC && bc != DEEP_OTHERS) {
     logPrintln("Power on reset");
-    if (SD.exists(aviFilename)) {
-      SD.remove(aviFilename);
-      logPrintln("removed " + aviFilename);
-    }
     rec_frame = 0;
     movi_size = 0;
-    total_size = 0;    
+    total_size = 0;
+    ++reset_times;
   }
-
+  
+  aviFilename += String(reset_times) + ".avi";
   aviFile = SD.open(aviFilename ,FILE_WRITE);
   if (!aviFile) {
     logPrintln("Movie File Open Error!");
@@ -208,7 +209,7 @@ void setup() {
     aviFile.write(avi_header, AVIOFFSET);
     sleep(3); // wait for 3sec
   }
-
+  
   Serial.println("Recording...");
   theCamera.begin();
   if (exposure_time < 0) {
@@ -244,7 +245,7 @@ void loop() {
   logPrintln("aviFile.size() " + String(aviFile.size())); 
   aviFile.seek(aviFile.size());
   aviFile.write("00dc", 4);
-
+  
   uint32_t jpeg_size = img.getImgSize();
   uint32_write_to_aviFile(jpeg_size);
   
@@ -252,16 +253,16 @@ void loop() {
   movi_size += jpeg_size;
   ++rec_frame;
   theCamera.end(); // to save power consumption
-
+  
   /* Spresense's jpg file is assumed to be 16bits aligned 
    * So, there's no padding operation */
-
+   
   float duration_sec = 1/target_fps; // fix 10fps for Timelapse
   float fps_in_float = target_fps; // fix 10fps for Timelapse
   float us_per_frame_in_float = 1000000.0f / fps_in_float;
   uint32_t fps = round(fps_in_float);
   uint32_t us_per_frame = round(us_per_frame_in_float);
-
+  
   /* overwrite riff file size */
   aviFile.seek(0x04);
   uint32_t total_size = movi_size + 12*rec_frame + 4;
@@ -295,6 +296,7 @@ void loop() {
     Serial.println("Information File Open Error for writing");
     while(1);
   }
+  
   infFile.println(String(rec_frame));
   infFile.println(String(movi_size));
   infFile.println(String(total_size));
@@ -303,6 +305,7 @@ void loop() {
   infFile.println(String(target_fps));
   infFile.println(String(auto_white_balance));  
   infFile.println(String(log_enable));  
+  infFile.println(String(reset_times));  
   infFile.close();
   
   logPrintln("Information File Update: ");
@@ -315,10 +318,9 @@ void loop() {
   logPrintln(" Duration (sec): " + String(duration_sec));
   logPrintln(" Frame per sec : " + String(fps));
   logPrintln(" Max data rate : " + String(max_bytes_per_sec));
-
+  
   logFile.close();
-
-
+  
   digitalWrite(LED2, LOW);
   digitalWrite(LED3, LOW);
   LowPower.deepSleep(interval_time); // Go to deep sleep for 60 seconds
